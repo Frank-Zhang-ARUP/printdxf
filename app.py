@@ -13,6 +13,7 @@ from ezdxf.addons.drawing.config import Configuration, ColorPolicy, LineweightPo
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 from pypdf import PdfReader, PdfWriter
 
 st.set_page_config(page_title="DXF Batch to A3 PDF", page_icon="📐", layout="wide")
@@ -43,6 +44,45 @@ def page_size(orientation: str):
     return A3_INCH if orientation == "横向" else A3_INCH[::-1]
 
 
+
+def setup_cjk_font(doc, uploaded_font_path=None):
+    """Make DXF TEXT/MTEXT/ATTRIB visible when original SHX/CJK fonts are unavailable."""
+    candidates = []
+    if uploaded_font_path and Path(uploaded_font_path).exists():
+        candidates.append(str(uploaded_font_path))
+    # Common paths/names on Streamlit Cloud/Linux and Windows/local runs.
+    candidates += [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "C:/Windows/Fonts/msyh.ttc",
+        "C:/Windows/Fonts/simhei.ttf",
+        "C:/Windows/Fonts/simsun.ttc",
+    ]
+    font_path = next((x for x in candidates if Path(x).exists()), None)
+    if not font_path:
+        # Last resort: pick an installed font that supports broad Unicode if present.
+        for f in fm.findSystemFonts():
+            low = f.lower()
+            if any(k in low for k in ["notosanscjk", "noto", "wenquanyi", "yahei", "simhei", "simsun"]):
+                font_path = f
+                break
+    if not font_path:
+        return None
+
+    # ezdxf uses the font assigned to DXF text styles. Replace missing SHX/TTF
+    # styles with the selected CJK font while preserving style names, height,
+    # width factor, rotation and entity alignment.
+    for style in doc.styles:
+        try:
+            style.dxf.font = font_path
+            if hasattr(style.dxf, "bigfont"):
+                style.dxf.bigfont = ""
+        except Exception:
+            pass
+    return font_path
+
+
 def convert_dxf_to_pdf(data: bytes, filename: str, settings: dict) -> bytes:
     with tempfile.TemporaryDirectory() as td:
         dxf_path = Path(td) / Path(filename).name
@@ -56,6 +96,7 @@ def convert_dxf_to_pdf(data: bytes, filename: str, settings: dict) -> bytes:
             doc = ezdxf.readfile(str(dxf_path))
             auditor = None
 
+        font_path = setup_cjk_font(doc, settings.get('font_path'))
         msp = doc.modelspace()
         fig = plt.figure(figsize=page_size(settings['orientation']))
         ax = fig.add_axes([0, 0, 1, 1])
@@ -123,7 +164,9 @@ with st.sidebar:
     min_lineweight_mm = st.slider("最小线宽 (mm)", 0.05, 0.50, 0.13, 0.01)
     dpi = st.select_slider("PDF渲染 DPI", options=[150, 200, 300, 400, 600], value=300,
                            help="PDF主体为矢量；DPI主要影响图内栅格图像。")
-    st.info("页面固定为 ISO A3：420 × 297 mm。程序自动按每个 DXF 的绘图范围居中并等比例缩放。")
+    st.info("页面固定为 ISO A3：420 × 297 mm。程序会为 TEXT / MTEXT / ATTRIB 自动使用可用中文字体替代缺失的 SHX 字体。")
+
+font_upload = st.file_uploader("可选：上传中文 TTF/OTF/TTC 字体", type=['ttf','otf','ttc'], accept_multiple_files=False, help="如果 DXF 使用 SHX 或特殊中文字体，建议上传 Noto Sans CJK SC、微软雅黑或黑体字体。")
 
 uploaded = st.file_uploader(
     "上传 DXF 文件（可多选）",
@@ -139,12 +182,19 @@ if uploaded:
             st.write(f"• {f.name}  ({len(f.getvalue()) / 1024:.1f} KB)")
 
     if st.button("开始批量转换", type="primary", use_container_width=True):
+        custom_font_path = None
+        if font_upload is not None:
+            suffix = Path(font_upload.name).suffix.lower()
+            custom_font_path = str(Path(tempfile.gettempdir()) / ('uploaded_cjk_font' + suffix))
+            Path(custom_font_path).write_bytes(font_upload.getvalue())
+
         settings = {
             'orientation': orientation,
             'background': background,
             'margin_ratio': margin_percent / 100.0,
             'min_lineweight_mm': min_lineweight_mm,
             'dpi': dpi,
+            'font_path': custom_font_path,
         }
         results, errors, used = [], [], set()
         progress = st.progress(0, text="准备转换…")

@@ -40,3 +40,11 @@ streamlit run app.py
 
 ## A3 尺寸校验
 PDF 页面由 Matplotlib 直接设置为 16.5354 × 11.6929 inch（横向），即 420 × 297 mm。代码没有使用 `bbox_inches='tight'`，因此不会把物理页面裁小。
+
+
+## v2 中文文字修复
+- 自动为 DXF 的 TEXT、MTEXT、ATTRIB 所使用的 text style 指定可用 CJK 字体。
+- 支持用户直接上传 `.ttf` / `.otf` / `.ttc` 中文字体。
+- 原图采用 SHX 而服务器没有该字体时，可用 Noto Sans CJK SC、微软雅黑、黑体等替代。
+- 保留 DXF 实体的文字高度、旋转角度、对齐和宽度因子；替代字体后字宽可能与原 SHX 略有差异。
+- 若文字实际是 AutoCAD 专用代理对象、外部参照或未绑定对象，需要先在 AutoCAD 中绑定/转换后再上传。
