@@ -46,41 +46,57 @@ def page_size(orientation: str):
 
 
 def setup_cjk_font(doc, uploaded_font_path=None):
-    """Make DXF TEXT/MTEXT/ATTRIB visible when original SHX/CJK fonts are unavailable."""
-    candidates = []
+    """Register a real CJK font with ezdxf, rebuild its cache, then remap DXF styles."""
+    from ezdxf.fonts import fonts as ezfonts
+
+    user_font_dir = Path.home() / ".local" / "share" / "fonts" / "dxf_pdf"
+    user_font_dir.mkdir(parents=True, exist_ok=True)
+
+    font_path = None
     if uploaded_font_path and Path(uploaded_font_path).exists():
-        candidates.append(str(uploaded_font_path))
-    # Common paths/names on Streamlit Cloud/Linux and Windows/local runs.
-    candidates += [
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
-        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-        "C:/Windows/Fonts/msyh.ttc",
-        "C:/Windows/Fonts/simhei.ttf",
-        "C:/Windows/Fonts/simsun.ttc",
+        # Put the uploaded font into a directory scanned by ezdxf/fontconfig.
+        src = Path(uploaded_font_path)
+        dst = user_font_dir / src.name
+        dst.write_bytes(src.read_bytes())
+        font_path = dst
+
+    candidates = [
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf"),
+        Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+        Path("C:/Windows/Fonts/msyh.ttc"),
+        Path("C:/Windows/Fonts/simhei.ttf"),
+        Path("C:/Windows/Fonts/simsun.ttc"),
     ]
-    font_path = next((x for x in candidates if Path(x).exists()), None)
-    if not font_path:
-        # Last resort: pick an installed font that supports broad Unicode if present.
+    if font_path is None:
+        font_path = next((x for x in candidates if x.exists()), None)
+
+    if font_path is None:
         for f in fm.findSystemFonts():
             low = f.lower()
-            if any(k in low for k in ["notosanscjk", "noto", "wenquanyi", "yahei", "simhei", "simsun"]):
-                font_path = f
+            if any(k in low for k in ["notosanscjk", "notoserifcjk", "wenquanyi", "yahei", "simhei", "simsun"]):
+                font_path = Path(f)
                 break
-    if not font_path:
-        return None
+    if font_path is None:
+        raise RuntimeError("服务器未找到包含中文字符的字体。请上传 Noto Sans CJK SC、微软雅黑或黑体的 TTF/OTF/TTC 文件。")
 
-    # ezdxf uses the font assigned to DXF text styles. Replace missing SHX/TTF
-    # styles with the selected CJK font while preserving style names, height,
-    # width factor, rotation and entity alignment.
+    # Critical: ezdxf caches fonts. A font uploaded after app startup is otherwise
+    # ignored and text is rendered as tofu boxes.
+    ezdxf.options.support_dirs = [str(user_font_dir), str(font_path.parent)]
+    ezfonts.build_system_font_cache()
+
+    # DXF text styles should reference the discovered font file name, not an
+    # arbitrary temporary absolute path.
+    font_name = font_path.name
     for style in doc.styles:
         try:
-            style.dxf.font = font_path
-            if hasattr(style.dxf, "bigfont"):
-                style.dxf.bigfont = ""
+            style.dxf.font = font_name
+            if style.dxf.hasattr("bigfont"):
+                style.dxf.discard("bigfont")
         except Exception:
             pass
-    return font_path
+    return str(font_path)
 
 
 def convert_dxf_to_pdf(data: bytes, filename: str, settings: dict) -> bytes:
